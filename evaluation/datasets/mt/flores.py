@@ -31,8 +31,22 @@ FLORES101_FULL_LANGS = (
     "mal,mar,mkd,mlt,mon,mri,msa,mya,npi,nld,nob,nso,nya,oci,orm,ory,pan,pol,"
     "por,pus,ron,rus,slk,slv,sna,snd,som,spa,srp,swe,swh,tam,tel,tgk,tgl,tha,"
     "tur,ukr,umb,urd,uzb,vie,wol,xho,yor,zho_simp,zho_trad,zul"
-).split(",")
+).split
 
+FLORES200_AFRICAN_LANGS = (
+    "afr,lin,ssw,amh,lug,tsn,nya,luo,umb,ian,fuv,nso,wol,"
+    "hau,orm,xho,ibo,sna,tso,kam,som,yor,kin,swh,zul").split(",")
+FLORES200_AFRICAN_WITH_ENG = (
+    "afr,amh,nya,fuv,hau,ibo,kam,kin,lug,luo,nso,"
+    "orm,sna,som,swh,ssw,tsn,umb,xho,tso,yor,zul"
+).split(",")
+FLORES200_AFRICAN_WITH_FRA ="kin,lin,swh,wol".split(",")
+FLORES200_AFRICAN_DIRECTIONS = (
+    [ ("eng", l) for l in FLORES200_AFRICAN_WITH_ENG ] +
+    [ (l, "eng") for l in FLORES200_AFRICAN_WITH_ENG ] +
+    [ ("fra", l) for l in FLORES200_AFRICAN_WITH_FRA ] +
+    [ (l, "fra") for l in FLORES200_AFRICAN_WITH_FRA ]
+)
 
 class Flores101Base(BaseDataset):
     def __init__(
@@ -43,6 +57,7 @@ class Flores101Base(BaseDataset):
         local_path: str,
         partition: str,
         languages: list,
+        directions: list = None,
         shard_by_lang: bool = False,
     ):
         self.local_path = local_path
@@ -72,6 +87,7 @@ class Flores101Base(BaseDataset):
         return helpers.get_data_s3_path(self.task.task_code, name, perturb_prefix)
 
     def dataset_available_on_s3(self, perturb_prefix=None) -> bool:
+        return False
         if not self.shard_by_lang:
             return super().dataset_available_on_s3(perturb_prefix)
         basepath = self._get_data_s3_path()
@@ -161,7 +177,7 @@ class Flores101Base(BaseDataset):
         raw_src_perfs = self.eval(predictions, targets)
         src_perfs = json.loads(raw_src_perfs["metadata_json"])["perf_by_tag"]
         directions = [m["tag"] for m in src_perfs]
-        expected_directions = [f"{src}-{tgt}" for tgt in self.languages if src != tgt]
+        expected_directions = self.directions
         assert sorted(directions) == sorted(expected_directions)
 
         duration = (time.time() - start) / 60
@@ -297,6 +313,59 @@ class Flores101Small2Test(Flores101Base):
             languages=FLORES101_SMALL2_LANGS,
         )
 
+class Flores200AfricanDev(Flores101Base):
+    def __init__(self):
+        rootpath = os.path.dirname(sys.path[0])
+        local_path = os.path.join(rootpath, "evaluation/data", "mt/flores200")
+        super().__init__(
+            task_code="flores_african",
+            name="flores200-african-dev",
+            round_id=1,
+            local_path=local_path,
+            partition="dev",
+            languages=FLORES200_AFRICAN_LANGS,
+            directions=FLORES200_AFRICAN_DIRECTIONS,
+        )
+
+
+class Flores200AfricanDevTest(Flores101Base):
+    def __init__(self):
+        rootpath = os.path.dirname(sys.path[0])
+        local_path = os.path.join(rootpath, "evaluation/data", "mt/flores200")
+        super().__init__(
+            task_code="flores_african",
+            name="flores200-african-devtest",
+            round_id=1,
+            local_path=local_path,
+            partition="devtest",
+            languages=FLORES200_AFRICAN_LANGS,
+            directions=FLORES200_AFRICAN_DIRECTIONS,
+        )
+
+
+class Flores200AfricanTest(Flores101Base):
+    def __init__(self):
+        rootpath = os.path.dirname(sys.path[0])
+        local_path = os.path.join(rootpath, "evaluation/data", "mt/flores200")
+        super().__init__(
+            task_code="flores_african",
+            name="flores200-african-test",
+            round_id=1,
+            local_path=local_path,
+            partition="test",
+            languages=FLORES200_AFRICAN_LANGS,
+            directions=FLORES200_AFRICAN_DIRECTIONS,
+        )
+
+
+def lang_matrix(langs: List[str]) -> List[Tuple[str, str]]:
+    directions = []
+    for src, tgt in itertools.product(langs, langs):
+        if src >= tgt:
+            continue
+        directions.append((src, tgt))
+        directions.append((tgt, src))
+
 
 @functools.lru_cache(maxsize=256)
 def read_raw_data(folder: Path, split: str, lang: str) -> List[str]:
@@ -320,21 +389,21 @@ def output_file(task_code: str, partition: str, outdir: Path, lang: str = None) 
     return outdir / f"{filename}.jsonl"
 
 
-def prepare_dataset(name: str = "Flores101Small1Dev", local_path: Path = None):
+def prepare_dataset(name: str = "Flores200AfricanDev", local_path: Path = None):
     assert "Flores" in name
     flores = globals()[name]()
     local_path = local_path or Path(flores.local_path)
-    assert local_path.exists(), f"Folder for {flores.task_code} not found: {local_path}"
+    assert local_path.exists(), f"Folder for {flores} not found: {local_path}"
     outdir = Path("/tmp") / "flores_json"
 
     return prepare(
         local_path,
         outdir,
         task_code=flores.task_code,
-        langs=flores.langs,
+        directions=flores.directions,
         partition=flores.partition,
         s3_bucket="s3://nllb",
-        shard=flores.shard,
+        shard=flores.shard_by_lang,
     )
 
 
@@ -342,7 +411,7 @@ def prepare(
     folder: Path,
     outdir: Path,
     task_code: str,
-    langs: List[str],
+    directions: List[Tuple[str, str]],
     partition: str,
     s3_bucket: str,
     shard: bool = False,
@@ -368,10 +437,7 @@ def prepare(
         return writer
 
     lines = 0
-    for src, tgt in itertools.product(langs, langs):
-        if src >= tgt:
-            continue
-
+    for src, tgt in directions:
         src_lines = read_raw_data(folder, partition, src)
         tgt_lines = read_raw_data(folder, partition, tgt)
 
@@ -415,7 +481,7 @@ def prepare(
             f"Wrote dataset {outfile}. {lines:_d} lines. Total size: "
             + f"{outfile.stat().st_size / 1024 / 1024:.1f}Mb"
         )
-        o.close()
+        shared_writer.close()
         _upload_file(task_code, partition, outfile, s3_bucket)
 
 
@@ -459,6 +525,9 @@ FLORES_DATASETS = {
     "flores101-small2-dev": Flores101Small2Dev,
     "flores101-small2-devtest": Flores101Small2DevTest,
     "flores101-small2-test": Flores101Small2Test,
+    "flores200-african-dev": Flores200AfricanDev,
+    "flores200-african-devtest": Flores200AfricanDevTest,
+    # "flores200-african-test": Flores200AfricanTest,
 }
 
 if __name__ == "__main__":
