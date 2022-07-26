@@ -69,9 +69,7 @@ class Flores101Base(BaseDataset):
         # When the dataset is sharded we don't put the extension
         # because AWS will match files by prefix.
         name = self.name + "-" if self.shard_by_lang else self.filename
-        return helpers.get_data_s3_path(
-            "flores/" + self.task.task_code, name, perturb_prefix
-        )
+        return helpers.get_data_s3_path(self.task.task_code, name, perturb_prefix)
 
     def dataset_available_on_s3(self, perturb_prefix=None) -> bool:
         if not self.shard_by_lang:

@@ -17,9 +17,9 @@ def init_logger(name):
     logger.addHandler(stderr_handler)
 
     # Set logging level of other libraries
-    logging.getLogger("boto3.resources").setLevel(logging.INFO)
-    logging.getLogger("botocore").setLevel(logging.INFO)
-    logging.getLogger("urllib3.connectionpool").setLevel(logging.INFO)
+    annoying_loggers = ["boto3.resources", "botocore", "urllib3.connectionpool", "s3transfer"]
+    for name in annoying_loggers:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     os.makedirs("../logs", exist_ok=True)
     file_handler = logging.FileHandler(f"../logs/dynabench-server-{name}.log")

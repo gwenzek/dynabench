@@ -51,9 +51,12 @@ class BaseDataset:
         if db_connection_avail:
             tm = TaskModel()
             self.task = tm.getByTaskCode(task_code)
+            self.task_config = yaml.load(self.task.config_yaml, yaml.SafeLoader)
+            self.reference_name = self.task_config["perf_metric"]["reference_name"]
         else:
             self.task = db_connection_not_avail_task_info
-
+            self.task_config = None
+            self.reference_name = ""
         self.s3_url = self._get_data_s3_url()
         self.longdesc = longdesc
         self.source_url = source_url
@@ -130,26 +133,13 @@ class BaseDataset:
     def get_batch_transform_config(
         self, sagemaker_client, endpoint_name, job_name, perturb_prefix=None
     ) -> dict:
-        input_names = [
-            obj["name"]
-            for obj in yaml.load(self.task.config_yaml, yaml.SafeLoader).get(
-                "input", []
-            )
-        ]
-        output_names = [
-            obj["name"]
-            for obj in yaml.load(self.task.config_yaml, yaml.SafeLoader).get(
-                "output", []
-            )
-        ]
+        input_names = [obj["name"] for obj in self.task_config.get("input", [])]
+        output_names = [obj["name"] for obj in self.task_config.get("output", [])]
         input_names_without_target_names = list(
             set(input_names).difference(set(output_names))
         )
         model_input_names = input_names_without_target_names + [
-            obj["name"]
-            for obj in yaml.load(self.task.config_yaml, yaml.SafeLoader).get(
-                "context", []
-            )
+            obj["name"] for obj in self.task_config.get("context", [])
         ]
         model_input_names.append("uid")  # unique example identifier
         return dict(
@@ -366,13 +356,12 @@ class BaseDataset:
             "tags": <list of string, can be empty>
         }
         """
+        if not self.reference_name:
+            self.task_config = yaml.load(self.task.config_yaml, yaml.SafeLoader)
+            self.reference_name = self.task_config["perf_metric"]["reference_name"]
         return {
             "id": example["uid"],
-            "answer": example[
-                yaml.load(self.task.config_yaml, yaml.SafeLoader)["perf_metric"][
-                    "reference_name"
-                ]
-            ],
+            "answer": example[self.reference_name],
             "tags": example.get("tags", []),
         }  # NOTE: For now, the perf_metric defines the output to look for
 
@@ -389,11 +378,7 @@ class BaseDataset:
         """
         return {
             "id": example["id"],
-            "pred": example[
-                yaml.load(self.task.config_yaml, yaml.SafeLoader)["perf_metric"][
-                    "reference_name"
-                ]
-            ],
+            "pred": example[self.task_config["perf_metric"]["reference_name"]],
         }  # NOTE: For now, the perf_metric defines the output to look for
 
     def to_dict(self, endpoint_name):

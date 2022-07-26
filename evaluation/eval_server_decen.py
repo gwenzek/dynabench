@@ -3,6 +3,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import json
+import importlib
 import logging
 import multiprocessing
 import os
@@ -13,13 +14,16 @@ import traceback
 import boto3
 import requests
 import uuid
+import yaml
+
 from datasets.common import BaseDataset
 from datasets.mt import flores
-
+import eval_config as eval_config_module
 from eval_config import eval_config
 from utils.helpers import api_download_dataset, dotdict, load_models_ids_for_task_owners
 from utils.logging import init_logger
 from utils.requester_decen import Requester
+from utils.evaluator_decen import Job
 
 
 sys.path.append("../api")  # noqa isort:skip
@@ -28,10 +32,11 @@ import common.helpers as util  # noqa isort:skip
 # TODO: [BE] strong typing on all interfce methods
 sleep_interval = 5
 scheduler_update_interval = 300
-logger = logging.getLogger("evaluation")
+logger = logging.getLogger("dynabench.evaluation")
 
 DYNABENCH_API = eval_config["DYNABENCH_API"]
 decen_eaas_secret = eval_config["decen_eaas_secret"]
+logging.basicConfig(level=eval_config.get("log_level", "INFO"))
 
 # TODO: allow several tasks
 def load_datasets_for_task_owner():
@@ -122,7 +127,8 @@ def main():
         print("No datasets uploaded for this task yet..please upload dataset")
 
     requester = Requester(eval_config, dataset_dict, active_model_ids)
-
+    job = Job(model_id=623, dataset_name="flores101-small1-dev")
+    requester.computer.compute_one_blocking(job)
     cpus = eval_config.get("compute_metric_processes", 2)
     with multiprocessing.pool.Pool(cpus) as pool:
         timer = scheduler_update_interval
@@ -258,6 +264,7 @@ def main():
                     if job:
                         # logger.info(pool)
                         # requester.computer.compute_one_async(pool, job)
+                        breakpoint()
                         requester.computer.compute_one_blocking(job)
                 except Exception as e:
                     print("job I failed on was")
@@ -277,6 +284,8 @@ def main():
 
             time.sleep(sleep_interval)
             timer += sleep_interval
+            # Allows to modify some settings without restarting the server
+            importlib.reload(eval_config_module)
 
 
 if __name__ == "__main__":
