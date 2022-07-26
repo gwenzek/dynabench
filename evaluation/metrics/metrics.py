@@ -251,8 +251,7 @@ def get_sp_bleu(predictions: list, targets: list):
     spm_pred = [sp_tokenize(spm, pred) for pred in predictions]
     spm_targets = [sp_tokenize(spm, tgt) for tgt in targets]
     bleu = sacrebleu.corpus_bleu(spm_pred, [spm_targets], force=True)
-    return bleu.score
-
+    return {"sp_bleu": bleu.score, "chrf_pp": get_chrf_pp(predictions, targets)}
 
 def get_sp_bleu_meta(task=None):
     return {"unit": "", "pretty_name": "sp-BLEU", "utility_direction": 1, "offset": 0}
