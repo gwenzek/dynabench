@@ -1,5 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 
+import importlib
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import time
 import boto3
 import uuid
 
+import build_config as build_config_module
 from build_config import build_config
 from utils.deployer import ModelDeployer
 from utils.helpers import (
@@ -20,6 +22,7 @@ from utils.helpers import (
 )
 from utils.logging import init_logger, logger
 
+logging.basicConfig(level=build_config.get("log_level", "INFO"))
 
 REQUIRED_BUILD_MESSAGE_KEYS = {
     "model_id",
@@ -57,8 +60,8 @@ def main():
         redeployment_queue = []
 
     while True:
-        try:
-            for message in queue.receive_messages():
+        for message in queue.receive_messages():
+            try:
                 try:
                     msg = json.loads(message.body)
                     logger.info(f"Build server received SQS message {msg}")
@@ -76,7 +79,6 @@ def main():
 
                     json_model = json.loads(msg["model_info"])
                     json_model["task"] = dotdict(json.loads(msg["task_info"]))
-                    breakpoint()
                     model = dotdict(json_model)
                 except Exception as e:
                     logging.error(f"Failed to parse queue message: {msg}")
@@ -124,7 +126,6 @@ def main():
                         decen=True,
                         decen_task_info=msg.get("task_info"),
                     )
-
                     # process deployment result
                     msg["name"] = model.name
                     msg["exception"] = response["ex_msg"]
@@ -167,10 +168,12 @@ def main():
                     api_model_update(model, "takendown")
 
                 ack(queue, message)
+            except Exception as e:
+                logger.exception(f"Got exception while processing request: {message.body}")
 
-            time.sleep(5)
-        except Exception as e:
-            logger.exception(f"Got exception while processing request: {message.body}")
+        time.sleep(5)
+        # Allows to modify some settings without restarting the server
+        importlib.reload(build_config_module)
 
 
 def ack(queue, message) -> None:
