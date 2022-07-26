@@ -33,20 +33,6 @@ FLORES101_FULL_LANGS = (
     "tur,ukr,umb,urd,uzb,vie,wol,xho,yor,zho_simp,zho_trad,zul"
 ).split
 
-FLORES200_AFRICAN_LANGS = (
-    "afr,lin,ssw,amh,lug,tsn,nya,luo,umb,ian,fuv,nso,wol,"
-    "hau,orm,xho,ibo,sna,tso,kam,som,yor,kin,swh,zul").split(",")
-FLORES200_AFRICAN_WITH_ENG = (
-    "afr,amh,nya,fuv,hau,ibo,kam,kin,lug,luo,nso,"
-    "orm,sna,som,swh,ssw,tsn,umb,xho,tso,yor,zul"
-).split(",")
-FLORES200_AFRICAN_WITH_FRA ="kin,lin,swh,wol".split(",")
-FLORES200_AFRICAN_DIRECTIONS = (
-    [ ("eng", l) for l in FLORES200_AFRICAN_WITH_ENG ] +
-    [ (l, "eng") for l in FLORES200_AFRICAN_WITH_ENG ] +
-    [ ("fra", l) for l in FLORES200_AFRICAN_WITH_FRA ] +
-    [ (l, "fra") for l in FLORES200_AFRICAN_WITH_FRA ]
-)
 
 class Flores101Base(BaseDataset):
     def __init__(
@@ -64,6 +50,8 @@ class Flores101Base(BaseDataset):
         self.partition = partition
         self.shard_by_lang = shard_by_lang
         self.languages = languages
+        self.directions = directions or lang_matrix(languages)
+        self.task_code = task_code
         task = helpers.dotdict(
             {
                 "s3_bucket": "nllb",
@@ -313,6 +301,87 @@ class Flores101Small2Test(Flores101Base):
             languages=FLORES101_SMALL2_LANGS,
         )
 
+# Note for Fula we explictly use Nigeria Fulfulde: fuv
+FLORES200_AFRICAN_LANGS = (
+    "afr,lin,ssw,amh,lug,tsn,nya,luo,umb,ian,fuv,nso,wol,"
+    "hau,orm,xho,ibo,sna,tso,kam,som,yor,kin,swh,zul"
+).split(",")
+FLORES200_AFRICAN_WITH_ENG = (
+    "afr,amh,nya,fuv,hau,ibo,kam,kin,lug,luo,nso,"
+    "orm,sna,som,swh,ssw,tsn,umb,xho,tso,yor,zul"
+).split(",")
+FLORES200_AFRICAN_WITH_FRA = "kin,lin,swh,wol".split(",")
+FLORES200_AFRICAN_SOUTH = [
+    ("xho", "zul"),
+    ("zul", "sna"),
+    ("sna", "afr"),
+    ("afr", "ssw"),
+    ("ssw", "tsn"),
+    ("tsn", "tso"),
+    ("tso", "nso"),
+    ("nso", "xho"),
+]
+FLORES200_AFRICAN_HORN = [
+    ("swh", "amh"),
+    ("amh","swh"),
+    ("luo", "orm"), # Luo -> Oromo
+    ("som", "amh"),
+    ("orm", "som"),
+    ("swh", "luo"),
+    ("amh", "luo"),
+    ("luo", "som"),
+]
+FLORES200_AFRICAN_NIGERIA = [
+    ("hau", "ibo"),
+    ("ibo", "yor"),
+    ("yor", "fuv"),
+    ("fuv", "hau"),
+    ("ibo", "hau"),
+    ("yor", "ibo"),
+    ("hau", "fuv"),
+    ("wol", "hau"),
+    ("hau", "wol"),
+    ("fuv", "wol"),
+    ("wol", "fuv"),
+]
+FLORES200_AFRICAN_CENTRAL = [
+    ("kin", "swh"),
+    ("lug", "lin"),
+    ("nya", "kin"), # Chichewa -> Kinyarwanda
+    ("swh", "lug"),
+    ("lin", "nya"),
+    ("lin", "kin"),
+    ("kin", "lug"),
+    ("nya", "swh"),
+]
+FLORES200_AFRICAN_PANAFRICA = [
+    ("amh", "zul"),
+    ("yor", "swh"),
+    ("swh", "yor"),
+    ("zul", "amh"),
+    ("kin", "hau"),
+    ("hau", "kin"),
+    ("nya", "som"),
+    ("som", "nya"),
+    ("xho", "lug"),
+    ("lug", "xho"),
+    ("wol", "swh"),
+    ("swh", "wol"),
+]
+
+FLORES200_AFRICAN_DIRECTIONS = (
+    [("eng", l) for l in FLORES200_AFRICAN_WITH_ENG]
+    + [(l, "eng") for l in FLORES200_AFRICAN_WITH_ENG]
+    + [("fra", l) for l in FLORES200_AFRICAN_WITH_FRA]
+    + [(l, "fra") for l in FLORES200_AFRICAN_WITH_FRA]
+    + FLORES200_AFRICAN_SOUTH
+    + FLORES200_AFRICAN_HORN
+    + FLORES200_AFRICAN_NIGERIA
+    + FLORES200_AFRICAN_CENTRAL
+    + FLORES200_AFRICAN_PANAFRICA
+)
+
+
 class Flores200AfricanDev(Flores101Base):
     def __init__(self):
         rootpath = os.path.dirname(sys.path[0])
@@ -389,12 +458,12 @@ def output_file(task_code: str, partition: str, outdir: Path, lang: str = None) 
     return outdir / f"{filename}.jsonl"
 
 
-def prepare_dataset(name: str = "Flores200AfricanDev", local_path: Path = None):
+def prepare_dataset(name: str = "Flores200AfricanDev", local_path: Path = None, outdir: Path = None):
     assert "Flores" in name
     flores = globals()[name]()
     local_path = local_path or Path(flores.local_path)
     assert local_path.exists(), f"Folder for {flores} not found: {local_path}"
-    outdir = Path("/tmp") / "flores_json"
+    outdir = outdir or Path("/tmp") / "flores_json"
 
     return prepare(
         local_path,
@@ -527,7 +596,7 @@ FLORES_DATASETS = {
     "flores101-small2-test": Flores101Small2Test,
     "flores200-african-dev": Flores200AfricanDev,
     "flores200-african-devtest": Flores200AfricanDevTest,
-    # "flores200-african-test": Flores200AfricanTest,
+    "flores200-african-test": Flores200AfricanTest,
 }
 
 if __name__ == "__main__":

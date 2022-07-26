@@ -57,7 +57,6 @@ RUN if [ ${setup} = True ]; then python -m pip install --no-cache-dir --force-re
 
 RUN echo 'from dynalab.tasks.task_io import TaskIO; TaskIO("'${task_code}'")'
 RUN python -c 'from dynalab.tasks.task_io import TaskIO; TaskIO("'${task_code}'")'
-RUN python -c 'import fairseq; print(fairseq)'
 
 ENV PYTHONIOENCODING=UTF-8
 ENV MY_SECRET=${my_secret}
