@@ -8,19 +8,15 @@ import sys
 
 
 def init_logger(name):
-    logger = logging.getLogger()
-
-    logger.setLevel(logging.NOTSET)
-
-    stderr_handler = logging.StreamHandler(sys.stdout)
-    stderr_handler.setLevel(logging.INFO)
-    logger.addHandler(stderr_handler)
+    # Note: the api/common/logging.py init_logger is also implicitly called,
+    # so we don't need to setup the stderr logger
 
     # Set logging level of other libraries
     annoying_loggers = ["boto3.resources", "botocore", "urllib3.connectionpool", "s3transfer"]
     for name in annoying_loggers:
         logging.getLogger(name).setLevel(logging.WARNING)
 
+    logger = logging.getLogger()
     os.makedirs("../logs", exist_ok=True)
     file_handler = logging.FileHandler(f"../logs/dynabench-server-{name}.log")
     formatter = logging.Formatter("%(name)s %(asctime)s %(msg)s")

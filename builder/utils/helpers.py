@@ -10,6 +10,7 @@ from build_config import build_config
 
 
 DYNABENCH_API = build_config["DYNABENCH_API"]
+PROD = "prod" in DYNABENCH_API
 decen_eaas_secret = build_config["decen_eaas_secret"]
 
 sys.path.append("../api")  # noqa isort:skip
@@ -37,7 +38,7 @@ def load_queue_dump(path, logger=None):
 
 
 # Decentralized Eaas Helpers
-def api_model_update(model, model_status, prod=False):
+def api_model_update(model, model_status, prod=PROD):
     data = {"deployment_status": model_status}
 
     r = requests.post(
@@ -48,7 +49,7 @@ def api_model_update(model, model_status, prod=False):
     )
 
 
-def api_send_email(model, msg, subject, template, prod=False):
+def api_send_email(model, msg, subject, template, prod=PROD):
     data = {
         "secret": model.secret,
         "template": template,
@@ -64,7 +65,7 @@ def api_send_email(model, msg, subject, template, prod=False):
     )
 
 
-def api_download_model(model_id, model_secret, prod=False):
+def api_download_model(model_id, model_secret, prod=PROD):
     data = {"model_id": model_id, "secret": model_secret}
 
     with requests.get(

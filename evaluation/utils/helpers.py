@@ -21,6 +21,7 @@ from models.model import ModelModel
 sys.path.append("../api")  # noqa
 
 DYNABENCH_API = eval_config["DYNABENCH_API"]
+PROD = "prod" in DYNABENCH_API
 decen_eaas_secret = eval_config["decen_eaas_secret"]
 task_code = eval_config["task_code"]
 
@@ -342,7 +343,7 @@ class dotdict(dict):
     __delattr__ = dict.__delitem__
 
 
-def api_model_eval_update(model_id, dataset_name, evaluation_status, prod=False):
+def api_model_eval_update(model_id, dataset_name, evaluation_status, prod=PROD):
     data = {"evaluation_status": evaluation_status, "dataset_name": dataset_name}
 
     _ = requests.get(
@@ -353,7 +354,7 @@ def api_model_eval_update(model_id, dataset_name, evaluation_status, prod=False)
     )
 
 
-def api_update_database_with_metrics(data_pkg, prod=False):
+def api_update_database_with_metrics(data_pkg, prod=PROD):
     r = requests.post(
         f"{DYNABENCH_API}/models/update_database_with_metrics",
         data=json.dumps(util.wrap_data_with_signature(data_pkg, decen_eaas_secret)),
@@ -361,10 +362,11 @@ def api_update_database_with_metrics(data_pkg, prod=False):
         verify=prod,
     )
 
-    return r.json()
+    res = r.json()
+    assert "error" not in res, f"Query to {r.request.uri} failed: {res}"
 
 
-def api_get_next_job_score_entry(job, prod=False):
+def api_get_next_job_score_entry(job, prod=PROD):
     str_encoded_obj = ujson.dumps(job, default=str)
 
     r = requests.get(
@@ -379,7 +381,7 @@ def api_get_next_job_score_entry(job, prod=False):
     return r.json()
 
 
-def api_model_info(model_id, prod=False) -> str:
+def api_model_info(model_id, prod=PROD) -> str:
     data = {"model_id": model_id}
 
     r = requests.get(
@@ -392,7 +394,7 @@ def api_model_info(model_id, prod=False) -> str:
     return r.json()
 
 
-def api_model_update(mid, model_status, prod=False):
+def api_model_update(mid, model_status, prod=PROD):
     data = {"deployment_status": model_status}
 
     _ = requests.post(
@@ -419,7 +421,7 @@ def load_models_ids_for_task_owners():
     return model_ids_list
 
 
-def api_download_dataset(dataset_id, perturb_prefix, prod=False):
+def api_download_dataset(dataset_id, perturb_prefix, prod=PROD):
     data = {"dataset_id": dataset_id, "perturb_prefix": perturb_prefix}
 
     with requests.get(
