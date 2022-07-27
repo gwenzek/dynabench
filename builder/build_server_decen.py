@@ -22,8 +22,6 @@ from utils.helpers import (
 )
 from utils.logging import init_logger, logger
 
-logging.basicConfig(level=build_config.get("log_level", "INFO"))
-
 REQUIRED_BUILD_MESSAGE_KEYS = {
     "model_id",
     "s3_uri",

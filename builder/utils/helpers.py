@@ -76,7 +76,8 @@ def api_download_model(model_id, model_secret, prod=PROD):
         stream=True,
     ) as r:
         download_filename = f"/tmp/modeldownloadid_{model_id}.tar.gz"
-        r.raise_for_status()
+        if r.status_code >= 400:
+            raise RuntimeError(f"Call to {r.request.url} failed with {r.status_code} due to: {r.text}")
         with open(download_filename, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
