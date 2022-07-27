@@ -31,7 +31,7 @@ FLORES101_FULL_LANGS = (
     "mal,mar,mkd,mlt,mon,mri,msa,mya,npi,nld,nob,nso,nya,oci,orm,ory,pan,pol,"
     "por,pus,ron,rus,slk,slv,sna,snd,som,spa,srp,swe,swh,tam,tel,tgk,tgl,tha,"
     "tur,ukr,umb,urd,uzb,vie,wol,xho,yor,zho_simp,zho_trad,zul"
-).split
+).split(",")
 
 
 class Flores101Base(BaseDataset):
@@ -71,11 +71,13 @@ class Flores101Base(BaseDataset):
         # filename has the .jsonl extension.
         # When the dataset is sharded we don't put the extension
         # because AWS will match files by prefix.
+        if "flores200-african" in self.name:
+            return helpers.get_data_s3_path("flores_african", self.filename, perturb_prefix)
+
         name = self.name + "-" if self.shard_by_lang else self.filename
         return helpers.get_data_s3_path(self.task.task_code, name, perturb_prefix)
 
     def dataset_available_on_s3(self, perturb_prefix=None) -> bool:
-        return False
         if not self.shard_by_lang:
             return super().dataset_available_on_s3(perturb_prefix)
         basepath = self._get_data_s3_path()
@@ -387,7 +389,7 @@ class Flores200AfricanDev(Flores101Base):
         rootpath = os.path.dirname(sys.path[0])
         local_path = os.path.join(rootpath, "evaluation/data", "mt/flores200")
         super().__init__(
-            task_code="flores_african",
+            task_code="flores_small1",
             name="flores200-african-dev",
             round_id=1,
             local_path=local_path,
@@ -402,7 +404,7 @@ class Flores200AfricanDevTest(Flores101Base):
         rootpath = os.path.dirname(sys.path[0])
         local_path = os.path.join(rootpath, "evaluation/data", "mt/flores200")
         super().__init__(
-            task_code="flores_african",
+            task_code="flores_small1",
             name="flores200-african-devtest",
             round_id=1,
             local_path=local_path,
@@ -417,7 +419,7 @@ class Flores200AfricanTest(Flores101Base):
         rootpath = os.path.dirname(sys.path[0])
         local_path = os.path.join(rootpath, "evaluation/data", "mt/flores200")
         super().__init__(
-            task_code="flores_african",
+            task_code="flores_small1",
             name="flores200-african-test",
             round_id=1,
             local_path=local_path,

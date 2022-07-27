@@ -55,7 +55,7 @@ def load_datasets_for_task_owner():
         status_code = json_resp["status_code"]
         error = json_resp["error"]
         print(f"Recieved {status_code} from dynabench: {error}")
-        return None, False
+        return None, False, False
 
     jsonResponse = r.json()
     datasetJsonResponse = jsonResponse["datasets_metadata"]
@@ -64,10 +64,22 @@ def load_datasets_for_task_owner():
     datasets_dict = {}
 
     json_task = util.json_decode(taskJsonResponse)
-
     # Change s3 bucket of the task to the one specified in the eval config
     json_task["s3_bucket"] = eval_config["dataset_s3_bucket"]
     task = dotdict(json_task)
+    task_config = yaml.load(task.config_yaml, yaml.SafeLoader)
+
+    if task_code.startswith("flores_"):
+        # Not all dataset have the same task. It's important
+        # to have correct class so that the eval_server call
+        # the correct `compute_job_metrics`
+
+        datasets_dict = {k: dataset_cls() for k, dataset_cls in flores.FLORES_DATASETS.items() if "african" in k}
+        for k, d in datasets_dict.items():
+            d.task = task
+            d.task_config = task_config
+            d.reference_name = "targetText"
+        return datasets_dict, False, len(datasets_dict) == 0
 
     for dataset_json in datasetJsonResponse:
         dataset = util.json_decode(dataset_json)
@@ -81,6 +93,7 @@ def load_datasets_for_task_owner():
         if dataset["name"] in flores.FLORES_DATASETS:
             d = flores.FLORES_DATASETS[dataset["name"]]()
             d.task = task
+            d.task_config = task_config
             datasets_dict[dataset["name"]] = d
         if dataset["name"] not in datasets_dict:
             datasets_dict[dataset["name"]] = BaseDataset(
@@ -127,7 +140,8 @@ def main():
         print("No datasets uploaded for this task yet..please upload dataset")
 
     requester = Requester(eval_config, dataset_dict, active_model_ids)
-    job = Job(model_id=623, dataset_name="flores101-small1-dev")
+    job = Job(model_id=623, dataset_name="flores200-african-dev")
+    breakpoint()
     requester.computer.compute_one_blocking(job)
     cpus = eval_config.get("compute_metric_processes", 2)
     with multiprocessing.pool.Pool(cpus) as pool:
