@@ -3,26 +3,35 @@
 # LICENSE file in the root directory of this source tree.
 
 import datetime
+import functools
 import importlib
 import json
+import logging
 import os
 import secrets
 import shutil
 import sys
 import time
+import typing as tp
+from pathlib import Path
 
 import boto3
 import jsonlines
 import requests
 import yaml
 
+import app.infrastructure.repositories.dataset
+import app.infrastructure.repositories.task
+from app import utils
 from app.domain.builder import Builder
 from app.domain.eval_utils.evaluator import Evaluator
 from app.domain.eval_utils.input_formatter import InputFormatter
-from app.infrastructure.repositories.dataset import DatasetRepository
+from app.infrastructure import repositories
 from app.infrastructure.repositories.round import RoundRepository
 from app.infrastructure.repositories.score import ScoreRepository
-from app.infrastructure.repositories.task import TaskRepository
+
+
+log = logging.getLogger(__name__)
 
 
 class Evaluation:
@@ -36,11 +45,25 @@ class Evaluation:
         self.sqs = self.session.client("sqs")
         self.cloud_watch = self.session.client("cloudwatch")
         self.s3_bucket = os.getenv("AWS_S3_BUCKET")
+        assert self.s3_bucket
+        self.decentralized = bool(os.getenv("DYNABENCH_API"))
         self.builder = Builder()
-        self.task_repository = TaskRepository()
-        self.score_repository = ScoreRepository()
-        self.dataset_repository = DatasetRepository()
-        self.round_repository = RoundRepository()
+
+        if not self.decentralized:
+            self.task_repository = repositories.task.TaskRepository()
+            self.score_repository = ScoreRepository()
+            self.dataset_repository = repositories.dataset.DatasetRepository()
+            self.round_repository = RoundRepository()
+        else:
+            self.task_repository = repositories.task.DecenTaskRepository()
+            self.dataset_repository = repositories.dataset.DecenDatasetRepository()
+
+    @functools.lru_cache()
+    def get_task_configuration(self, task_id: int) -> dict:
+        task_configuration = yaml.safe_load(
+            self.task_repository.get_by_id(task_id)["config_yaml"]
+        )
+        return task_configuration
 
     def require_fields_task(self, folder_name: str):
         input_location = f"./app/models/{folder_name}/app/api/schemas/model.py"
@@ -52,11 +75,16 @@ class Evaluation:
         spec.loader.exec_module(module)
         return module.ModelSingleInput.schema().get("required")
 
-    def get_task_configuration(self, task_id: int):
-        task_configuration = yaml.safe_load(
-            self.task_repository.get_by_id(task_id)["config_yaml"]
-        )
-        return task_configuration
+    @functools.lru_cache()
+    def get_task_inputs(self, task_code: str) -> tp.List[str]:
+        task_config = self.get_task_configuration(task_code)
+        inputs = [obj["name"] for obj in task_config["input"]]
+        contexts = [obj["name"] for obj in task_config.get("context", [])]
+        outputs = set(obj["name"] for obj in task_config.get("output", []))
+
+        # Make sure the models don't receive the outputs.
+        # Maybe this could be validated before the task creation
+        return [x for x in inputs + contexts if x not in outputs]
 
     def single_evaluation_ecs(self, ip: str, json_data: dict):
         headers = {
@@ -65,7 +93,8 @@ class Evaluation:
         response = requests.post(
             f"http://{ip}/model/single_evaluation", headers=headers, json=json_data
         )
-        return json.loads(response.text)
+        # TODO: error handling
+        return response.json()
 
     def get_scoring_datasets(self, task_id: int):
         jsonl_scoring_datasets = self.dataset_repository.get_scoring_datasets(task_id)
@@ -131,31 +160,41 @@ class Evaluation:
         return {param: sample_dataset.get(param) for param in schema}
 
     def heavy_prediction(self, datasets: list, task_code: str, model: str):
-        ip, model_name, folder_name, arn_service = self.builder.get_ip_ecs_task(model)
+        folder_name = model.split("/")[-1].split(".")[0]
+        ip, model_name = self.builder.get_ip_ecs_task(model)
         final_dict_prediction = {}
-        start_prediction = time.time()
-        num_samples = 0
         for dataset in datasets:
-            dict_dataset_type = {}
-            with jsonlines.open(
-                "./app/models/{}/datasets/{}".format(folder_name, dataset["dataset"]),
-                "r",
-            ) as jsonl_f:
-                lst = [obj for obj in jsonl_f]
-            responses = []
-            schema = self.require_fields_task(folder_name)
-            self.validate_input_schema(schema, lst)
-            for line in lst:
-                answer = self.single_evaluation_ecs(
-                    ip, self.build_single_request(schema, line)
-                )
-                answer["signature"] = secrets.token_hex(15)
-                answer["id"] = line["uid"]
-                responses.append(answer)
-            predictions = "./app/models/{}/datasets/{}.out".format(
+            dataset_file = "./app/{}/datasets/{}".format(
                 folder_name, dataset["dataset"]
             )
-            num_samples += len(lst)
+            with jsonlines.open(dataset_file, "r") as jsonl_f:
+                samples = list(jsonl_f)
+
+            schema = self.get_task_inputs(task_code)
+            # self.validate_input_schema(schema, samples)
+
+            # TODO: this seems very unefficient.
+            # There is always exactly one flying request.
+            # So this server is doing nothing while the task server is working,
+            # and the task server is doing nothing while we are handling responses.
+            # We should enqueue several queries or at least parallelize over datasets
+            responses = []
+            for sample in samples:
+                args = {k: sample[k] for k in schema}
+                # TODO: where do those weird names come from ?
+                args = {
+                    "sourceText": args["sourceText"],
+                    "origin_lan": args["sourceLanguage"],
+                    "target_lan": args["targetLanguage"],
+                }
+                answer = self.single_evaluation_ecs(ip, args)
+                answer["signature"] = secrets.token_hex(15)
+                answer["id"] = sample["uid"]
+                responses.append(answer)
+
+            predictions = "./app/{}/datasets/{}.out".format(
+                folder_name, dataset["dataset"]
+            )
             with jsonlines.open(predictions, "w") as writer:
                 writer.write_all(responses)
             name_prediction = predictions.split("/")[-1]
@@ -210,7 +249,7 @@ class Evaluation:
     def get_throughput(self, num_samples: int, seconds_time_prediction: float):
         return round(num_samples / seconds_time_prediction, 2)
 
-    def evaluation(self, task: str, model_s3_zip: str, model_id: int) -> dict:
+    def evaluation(self, task: str, model_s3_zip: str, model_id: int) -> tp.List[dict]:
         tasks = self.task_repository.get_model_id_and_task_code(task)
         delta_metrics_task = self.get_task_configuration(tasks.id)["delta_metrics"]
         delta_metrics_task = [
@@ -291,6 +330,7 @@ class Evaluation:
                 formatted_dict["formatted_base_predictions"],
                 formatted_dict["formatted_base_dataset"],
             )
+            # TODO: remove hardcoding and use delta_metrics list
             delta_metrics = {}
             if perturb_exists:
                 delta_metrics = evaluator.evaluate_delta_metrics(
@@ -369,5 +409,6 @@ class Evaluation:
                 data.append(json.loads(line))
         return data
 
+    @staticmethod
     def _upload_results(evaluated_model_metrics: dict):
         return None

@@ -76,7 +76,7 @@ class Evaluator:
 
     def evaluate_delta_metrics(
         self, grouped_predictions: list, grouped_robusts: list, grouped_fairs: list
-    ) -> list:
+    ) -> dict:
 
         """
         Calculates the delta metric given a perturb prefix,

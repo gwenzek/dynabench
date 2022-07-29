@@ -3,16 +3,26 @@
 # LICENSE file in the root directory of this source tree.
 
 import base64
+import logging
 import os
+import shutil
 import time
 from zipfile import ZipFile
 
 import boto3
 import docker
-from dotenv import load_dotenv
+
+from app import utils
 
 
-load_dotenv()
+log = logging.getLogger(__name__)
+
+
+def get_model_name(model_zip_uri: str) -> str:
+    model_name = model_zip_uri.split("/")[-1]
+    model_name = "-".join(model_name.split(".")[0].replace(" ", "").split("-")[1:])
+    assert model_name, f"Couldn't extract a proper model name from {model_zip_uri}"
+    return model_name
 
 
 class Builder:
@@ -20,36 +30,38 @@ class Builder:
         self.session = boto3.Session(
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-            region_name=os.getenv("AWS_REGION"),
-        )
-        self.eni = boto3.resource(
-            "ec2",
-            region_name=os.getenv("AWS_REGION"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            region_name=os.environ["AWS_REGION"],
         )
         self.s3 = self.session.client("s3")
         self.ecs = self.session.client("ecs")
+        self.ec2 = self.session.client("ec2")
         self.lamda_ = self.session.client("lambda")
         self.api_gateway = self.session.client("apigateway")
         self.ecr = self.session.client("ecr")
+        self.decentralized = bool(os.getenv("DYNABENCH_API"))
+        # Required keys
+        self.task_execution_role = os.environ["AWS_TASK_EXECUTION_ROLE"]
+        self.s3_bucket = os.environ["AWS_S3_BUCKET"]
         self.docker_client = docker.from_env()
 
-    def download_zip(self, bucket_name: str, model: str):
-        zip_name = model.split("/")[-1]
-        folder_name = model.split("/")[-1].split(".")[0]
-        model_name = "-".join(zip_name.split(".")[0].replace(" ", "").split("-")[1:])
-        self.s3.download_file(
-            bucket_name, model, f"./app/models/{folder_name}/{zip_name}"
-        )
-        return zip_name, model_name
-
-    def unzip_file(self, zip_name: str):
+    def download_and_unzip(self, bucket_name: str, model_zip_uri: str) -> str:
+        zip_name = model_zip_uri.split("/")[-1]
         folder_name = zip_name.split(".")[0]
-        with ZipFile(f"./app/models/{folder_name}/{zip_name}", "r") as zipObj:
-            zipObj.extractall(f"./app/models/{folder_name}")
-        os.remove(f"./app/models/{folder_name}/{zip_name}")
-        return folder_name
+        local_zip_file = f"./app/model/{zip_name}"
+        if self.decentralized:
+            # return utils.api_download_model(model, model.secret)
+            shutil.copyfile(
+                f"/home/ubuntu/submissions/flores_small1-dummy.zip",
+                local_zip_file,
+            )
+        else:
+            self.s3.download_file(bucket_name, model_zip_uri, local_zip_file)
+
+        model_dir = f"./app/{folder_name}/model"
+        with ZipFile(local_zip_file, "r") as zipObj:
+            zipObj.extractall(model_dir)
+        os.remove(local_zip_file)
+        return model_dir
 
     def principal(self):
         zip_name, model_name = self.download_zip(
@@ -68,10 +80,15 @@ class Builder:
         return {"ecr_username": "AWS", "ecr_password": ecr_password, "ecr_url": ecr_url}
 
     def create_repository(self, repo_name: str) -> str:
-        response = self.ecr.create_repository(
-            repositoryName=repo_name, imageScanningConfiguration={"scanOnPush": True}
-        )
-        return response["repository"]["repositoryUri"]
+        try:
+            response = self.ecr.create_repository(
+                repositoryName=repo_name,
+                imageScanningConfiguration={"scanOnPush": True},
+            )
+            return response["repository"]["repositoryUri"]
+        except self.ecr.exceptions.RepositoryAlreadyExistsException as e:
+            log.info(f"reusing repository '{repo_name}', because {e}")
+            return repo_name
 
     def push_image_to_ECR(
         self, repository_name: str, folder_name: str, tag: str
@@ -92,6 +109,7 @@ class Builder:
                 "password": ecr_config["ecr_password"],
             },
         )
+        log.info(f"Pushed docker image {image} to ECR {repository_name}")
         return f"{repository_name}:{tag}"
 
     def create_task_definition(self, name_task: str, repo: str) -> str:
@@ -102,10 +120,11 @@ class Builder:
                     "image": repo,
                 }
             ],
-            executionRoleArn="arn:aws:iam::877755283837:role/ecsTaskExecutionRole",
+            executionRoleArn=self.task_execution_role,
             family=name_task,
             networkMode="awsvpc",
             requiresCompatibilities=["FARGATE"],
+            # TODO: This seems a lot. Also it should be configurable per task organizer
             cpu="4096",
             memory="20480",
         )
@@ -113,23 +132,25 @@ class Builder:
 
     def create_ecs_endpoint(self, name_task: str, repo: str) -> str:
         task_definition = self.create_task_definition(name_task, repo)
+        network_conf = {
+            "awsvpcConfiguration": {
+                "subnets": [
+                    os.getenv("SUBNET_1"),
+                    os.getenv("SUBNET_2"),
+                ],
+                "assignPublicIp": "ENABLED",
+                "securityGroups": [os.getenv("SECURITY_GROUP")],
+            }
+        }
         run_service = self.ecs.create_service(
-            cluster=os.getenv("CLUSTER_TASK_EVALUATION"),
+            cluster=os.getenv("CLUSTER_TASK_EVALUATION", "heavy-task-evaluation"),
             serviceName=name_task,
             taskDefinition=task_definition,
             desiredCount=1,
-            networkConfiguration={
-                "awsvpcConfiguration": {
-                    "subnets": [
-                        os.getenv("SUBNET_1"),
-                        os.getenv("SUBNET_2"),
-                    ],
-                    "assignPublicIp": "ENABLED",
-                    "securityGroups": [os.getenv("SECURITY_GROUP")],
-                }
-            },
+            networkConfiguration=network_conf
             launchType="FARGATE",
         )
+
         while True:
             describe_service = self.ecs.describe_services(
                 cluster=os.getenv("CLUSTER_TASK_EVALUATION"),
@@ -140,6 +161,7 @@ class Builder:
             ]
             if service_state != "COMPLETED":
                 time.sleep(60)
+            # TODO handle other states
             else:
                 arn_service = describe_service["services"][0]["serviceArn"]
                 run_task = self.ecs.list_tasks(
